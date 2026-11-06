@@ -18,6 +18,8 @@ BOT_COMMANDS = [
     BotCommand(command="timezone", description="🌍 Change your time zone"),
     BotCommand(command="start", description="🏠 Restart the conversation and open the calendar"),
     BotCommand(command="help", description="❓ How to use Foodie"),
+    BotCommand(command="privacy", description="Privacy policy"),
+    BotCommand(command="delete_me", description="Delete my data"),
     BotCommand(command="language", description="🌐 Change interface language"),
 ]
 

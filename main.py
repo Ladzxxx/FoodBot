@@ -13,13 +13,19 @@ from Handlers.statistics import router as statistics_router
 from Handlers.profile import router as profile_router
 from Handlers.meal import router as meal_router
 from Handlers.commands import router as commands_router, set_bot_commands
+from Handlers.privacy import router as privacy_router
+from Handlers.morning import router as morning_router
+from privacy_access import PrivacyAccess
 from reminders import reminder_loop
 from Handlers.pain import router as pain_router
 
 # Нажатия одного пользователя идут по очереди: двойной клик не пропустит вопрос.
 dispatcher = Dispatcher(events_isolation=SimpleEventIsolation())
 
-dispatcher.include_routers(calendar_router, commands_router, pain_router, day_router, statistics_router, meal_router, profile_router)
+dispatcher.message.outer_middleware(PrivacyAccess())
+dispatcher.callback_query.outer_middleware(PrivacyAccess())
+
+dispatcher.include_routers(privacy_router, morning_router, calendar_router, commands_router, pain_router, day_router, statistics_router, meal_router, profile_router)
 
 
 async def main():

@@ -13,7 +13,7 @@ async def get_pain_answers(user_id, first=date.min, last=date.max):
     return [dict(row) for row in answers], [dict(row) for row in options]
 
 
-async def save_pain_choice(user_id, selected_date, key, code, custom_text=None):
+async def save_pain_choice(user_id, selected_date, key, code, custom_text=None, *, morning_id=None):
     if key not in PAIN_QUESTIONS or (code != 'done' and code not in option_labels(key)):
         raise ValueError('pain.error.invalid_selection')
     if custom_text is not None and (code != 'other' or not 1 <= len(custom_text.strip()) <= (300 if key == 'pain_triggers' else 200)):
@@ -56,5 +56,8 @@ async def save_pain_choice(user_id, selected_date, key, code, custom_text=None):
         await db.execute('''INSERT INTO day_pain_answers VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(user_id, entry_date, question_key) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at''', (*params, status, saved_at))
         await db.execute('UPDATE diary_entries SET next_step = ?, updated_at = ? WHERE user_id = ? AND entry_date = ?', (next_step, saved_at, user_id, day))
+        if morning_id:
+            await db.execute("UPDATE morning_sessions SET step = ?, answers_count = answers_count + 1 WHERE user_id = ? AND session_id = ?",
+                (next_step, user_id, morning_id))
         await db.commit()
     return next_step

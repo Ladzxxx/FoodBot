@@ -351,10 +351,7 @@ TEXTS = {'calendar.day_summary': '<b>Selected day: {date:%d.%m.%Y}</b>\n'
                                    'After 24 hours without a completed entry, I can send one reminder per local '
                                    'day.\n'
                                    'Choose the earliest reminder hour.',
- 'profile.question.reminder_period': 'When should I remind you?\n'
-                                     '\n'
-                                     'Morning — write about yesterday.\n'
-                                     'Evening — review today before bed.',
+ 'profile.question.reminder_period': "When should I remind you?\n\nMorning — yesterday’s diary + today’s sleep\nEvening — today’s diary + today’s sleep",
  'profile.question.utc_offset': '🌍 What time zone are you in?',
  'profile.russian': 'Russian',
  'profile.time': '{hour:02d}:00',
@@ -433,3 +430,72 @@ TEXTS = {'calendar.day_summary': '<b>Selected day: {date:%d.%m.%Y}</b>\n'
                        '<b>🍽 Meal notes: {meals}</b>',
  'statistics.user_suspected_triggers': 'User-suspected triggers',
  'statistics.values_2f_10_below_below_7': '{values:.2f}/10 ({below} below 7)'}
+
+
+# CAN CHANGE TEXT: утренний опрос, политика и отдельное согласие.
+TEXTS.update({
+    "privacy.welcome": "Welcome to FoodBot. First choose your language and review how your data is handled.",
+    "privacy.choose_language": "Выберите язык / Choose your language",
+    "privacy.policy": "FoodBot Privacy Policy\nVersion {version}\n\nOperator: Лозовский Владислав Александрович (Lozovsky Vladislav Alexandrovich).\nContacts: Telegram @ooosila; loz_vlad@icloud.com.\n\nFoodBot stores your Telegram user and private chat IDs, language, profile settings, and the sleep, food, mood, pain, symptoms, medication and notes you record. Previously saved gender and birth year may also remain in your profile. This information provides your diary, reminders and statistics. Excel exports are created in memory and sent to your private chat.\n\nAccording to the owner, the bot is hosted by a Russian hosting provider. Messages also pass through Telegram and are processed under its rules. The operator may access data for support and maintenance.\n\nRecords are kept until you delete them or the service ends. /delete_me withdraws consent and deletes your information from the bot's active database. According to the owner, database backups are deleted weekly. Previous data may remain in backups until the next deletion. This does not automatically delete Telegram message history or previously downloaded files.\n\nView this policy with /privacy. FoodBot is a personal diary for adults and does not diagnose conditions.",
+    "privacy.consent": "Do you allow FoodBot to process the information you enter, including health information, to provide your diary, reminders, and statistics? You can withdraw your consent through /delete_me.\n\nChoosing Don't agree deletes all your information from the bot's active database.",
+    "privacy.agree": "Agree",
+    "privacy.decline": "Don't agree",
+    "privacy.accepted": "Your choice is saved. Let's continue setup.",
+    "privacy.expired": "This button has expired. Send /start.",
+    "privacy.start_required": "Send /start to begin or review consent.",
+    "privacy.declined": "You did not give consent. Your data has been deleted from the bot's active database. Send /start to begin again. Telegram history and backups are handled separately under the privacy policy.",
+    "privacy.deleted": "Your data has been deleted from the bot's active database. Send /start to begin again. Telegram history and backups are handled separately under the privacy policy.",
+    "privacy.delete_question": "Delete all your data from FoodBot's active database and withdraw consent? This cannot be undone. Telegram history and backups are handled separately under the privacy policy.",
+    "privacy.delete_confirm": "Delete my data",
+    "privacy.delete_cancelled": "Deletion cancelled.",
+    "privacy.delete_failed": "Deletion could not be completed. Diary access and reminders are disabled. Try /delete_me again or use the operator contact in /privacy.",
+    "command.privacy": "Privacy policy",
+    "command.delete_me": "Delete my data",
+    "morning.open": "Sleep for {date:%d.%m.%Y} and yesterday's diary",
+    "morning.intro": "Morning diary\n\nSleep: the night of {bedtime_date:%d.%m.%Y}–{sleep_date:%d.%m.%Y}.\nOther answers: {other_date:%d.%m.%Y}.\n\nSaved answers will remain. Use the separate editing buttons to change them.\n",
+    "morning.sleep_values": "\nSleep: {bedtime} → {wake}\nSleep satisfaction: {satisfaction}\n",
+    "morning.other_values": "\nYesterday's mood stability: {mood}\nYesterday's abdominal pain: {ache}\n",
+    "morning.continue": "Fill missing answers",
+    "morning.resume": "Resume saved morning diary",
+    "morning.edit_sleep": "Edit sleep",
+    "morning.edit_other": "Edit yesterday's answers",
+    "morning.view_other": "View all yesterday's answers",
+    "morning.saved": "Entry saved!\nSleep — {sleep_date:%d.%m.%Y}.\nOther answers — {other_date:%d.%m.%Y}.",
+    "morning.stale": "This morning reminder is out of date. Start an entry for the current dates or resume the unfinished entry with its stated dates.",
+    "morning.expired": "This morning diary has expired. Open a current reminder or /callendar."
+})
+
+TEXTS["commands.help"] += "\n\n/privacy — privacy policy.\n/delete_me — delete your data and withdraw consent."
+
+TEXTS.update({
+    "morning.question.ache": "🤕 Did you have abdominal pain on {date:%d.%m.%Y}?",
+    "morning.question.wake_time": "🌅 What time did you wake up on {date:%d.%m.%Y}?\nChoose 00:00–24:00 on that date or type HH:MM."
+})
+
+# CAN CHANGE TEXT: сохранённые ответы, утренние пересечения и время еды.
+TEXTS.update({
+    "day.already_recorded": "\n\nAlready recorded:\n{value}",
+    "day.previous_answer": "\n\nPreviously recorded:\n{value}",
+    "day.previous_shortened": "… (shortened for display)",
+    "profile.every_evening_recommended": "Evening (recommended)",
+    "reminders.friend": "friend",
+    "reminders.morning_greeting": "Good morning, {nickname}! Shall we make an entry?",
+    "reminders.evening_greeting": "Good evening, {nickname}! Shall we make an entry?",
+    "morning.only_sleep": "Record only this morning's sleep",
+    "morning.continue_day": "Continue yesterday's diary",
+    "morning.resume_dates": "Resume: sleep {sleep_date}, day {other_date}",
+    "morning.yesterday_done": "\nThe other answers for {date:%d.%m.%Y} are already complete. Shall we record only this morning's sleep?",
+    "morning.continue_yesterday": "\nLet's continue the diary for {date:%d.%m.%Y} and fill missing answers.",
+    "morning.yesterday_sleep_saved": "\nSleep for {date:%d.%m.%Y} is already recorded and will stay unchanged.",
+    "morning.today_sleep_saved": "\nSleep for {date:%d.%m.%Y} is already recorded. We will not ask for it again.",
+    "morning.already_complete": "\nBoth sections are complete. View the entry or explicitly choose to edit it.",
+    "meal.time_hint": "\nSend HH:MM to change this meal's time, or HH:MM followed by a description. Its date will stay the same.",
+    "meal.change_time": "Change time",
+    "meal.invalid_time": "Enter HH:MM from 00:00 to 23:59. For example: 13:45.",
+    "meal.not_found": "This entry is unavailable or the button has expired. Open /callendar or record a new meal with /meal.",
+    "meal.time_question": "Meal for {date:%d.%m.%Y}.\nAlready recorded time: {time}.\n\nEnter a new time as HH:MM. The date and description will stay unchanged.",
+    "meal.time_changed": "Previously recorded: {old}.\nNew time: {new}.\n\n"
+})
+
+# CAN CHANGE TEXT: краткие даты утренней записи.
+TEXTS["morning.short_dates"] = "Sleep: {sleep_date:%d.%m.%Y}.\nOther answers: {other_date:%d.%m.%Y}.\n"

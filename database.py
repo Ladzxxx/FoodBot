@@ -119,6 +119,19 @@ async def init_db():
         # Старый вопрос явно относил отход ко сну ко вчера: сохраняем это значение.
         if "bedtime_day" not in columns:
             await db.execute("ALTER TABLE diary_entries ADD COLUMN bedtime_day INTEGER NOT NULL DEFAULT -1 CHECK (bedtime_day IN (-1, 0))")
+        await db.execute("""CREATE TABLE IF NOT EXISTS user_consents (
+            user_id INTEGER PRIMARY KEY, policy_version TEXT NOT NULL,
+            consent_version TEXT NOT NULL, accepted_at INTEGER NOT NULL,
+            language TEXT NOT NULL CHECK (language IN ('ru','en')))""")
+        await db.execute("""CREATE TABLE IF NOT EXISTS morning_sessions (
+            user_id INTEGER PRIMARY KEY, sleep_date TEXT NOT NULL, other_date TEXT NOT NULL,
+            session_id TEXT NOT NULL, step TEXT NOT NULL,
+            edit_sleep INTEGER NOT NULL DEFAULT 0, edit_other INTEGER NOT NULL DEFAULT 0,
+            utc_offset INTEGER NOT NULL, answers_count INTEGER NOT NULL DEFAULT 0)""")
+        if "day_section_complete" not in columns:
+            await db.execute("ALTER TABLE diary_entries ADD COLUMN day_section_complete INTEGER NOT NULL DEFAULT 0")
+            # Миграция не меняет даты и ответы прежних завершённых записей.
+            await db.execute("UPDATE diary_entries SET day_section_complete = completed")
         await db.commit()
 
 
@@ -216,16 +229,20 @@ async def reset_reminder_choice(user_id: int):
 
 
 async def get_reminder_profiles() -> list[dict]:
+    from privacy_storage import POLICY_VERSION, CONSENT_VERSION
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("""
             SELECT * FROM user_profiles WHERE setup_complete = 1 AND reminders_enabled = 1
-        """) as cursor:
+                AND EXISTS (SELECT 1 FROM user_consents c WHERE c.user_id = user_profiles.user_id
+                    AND c.policy_version = ? AND c.consent_version = ?)
+        """, (POLICY_VERSION, CONSENT_VERSION)) as cursor:
             rows = await cursor.fetchall()
     return [dict(row) for row in rows]
 
 
-async def reserve_reminder(user_id: int, local_date: str, inactive_before: int, expected_profile: dict | None = None) -> bool:
+async def reserve_reminder(user_id: int, local_date: str, inactive_before: int, expected_profile: dict | None = None, *, check_inactivity: bool = True) -> bool:
+    from privacy_storage import POLICY_VERSION, CONSENT_VERSION
     expected = expected_profile or {}
     async with aiosqlite.connect(DB_PATH) as db:
         # Бронируем день до отправки, чтобы перезапуск не повторил напоминание.
@@ -233,10 +250,12 @@ async def reserve_reminder(user_id: int, local_date: str, inactive_before: int, 
             UPDATE user_profiles SET last_reminder_date = ?, last_reminder_at = ?
             WHERE user_id = ? AND setup_complete = 1 AND reminders_enabled = 1
                 AND (last_reminder_date IS NULL OR last_reminder_date != ?)
-                AND COALESCE(last_entry_at, reminder_started_at) <= ?
+                AND (? = 0 OR COALESCE(last_entry_at, reminder_started_at) <= ?)
+                AND EXISTS (SELECT 1 FROM user_consents c WHERE c.user_id = user_profiles.user_id
+                    AND c.policy_version = ? AND c.consent_version = ?)
                 AND (? IS NULL OR (utc_offset = ? AND reminder_period = ? AND reminder_hour = ?))
         """, (
-            local_date, inactive_before + 86400, user_id, local_date, inactive_before,
+            local_date, inactive_before + 86400, user_id, local_date, int(check_inactivity), inactive_before, POLICY_VERSION, CONSENT_VERSION,
             expected.get("utc_offset"), expected.get("utc_offset"),
             expected.get("reminder_period"), expected.get("reminder_hour"),
         ))

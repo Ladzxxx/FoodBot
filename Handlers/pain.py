@@ -12,6 +12,7 @@ from Keyboards.pain import pain_keyboard
 from pain_storage import get_pain_answers, save_pain_choice
 from day_storage import get_day_entry
 from day_storage import get_medications
+from day_answers import previous_pain_answer, with_previous
 
 router = Router()
 
@@ -25,7 +26,7 @@ async def safe_delete(bot, chat_id, message_id):
         pass
 
 
-async def pain_screen(user_id, selected_date, key, lang="en"):
+async def pain_screen(user_id, selected_date, key, lang="en", previous=None):
     _, options = await get_pain_answers(user_id, selected_date, selected_date)
     options = [item for item in options if item['question_key'] == key]
     # CAN CHANGE TEXT
@@ -33,6 +34,7 @@ async def pain_screen(user_id, selected_date, key, lang="en"):
     if key == 'pain_location':
         text += t(lang, 'pain.intro', date=selected_date.strftime('%d.%m.%Y')) + '\n\n'
     text += t(lang, "pain.question." + key)
+    text = with_previous(text, previous, lang)
     text += t(lang, 'pain.selections_saved_so_far') + ('\n'.join(selected_labels(key, options, lang=lang)) or '___')
     if key == 'pain_symptoms' and any(item['is_selected'] and item['option_code'] in URGENT_CODES for item in options):
         text += '\n\n⚠️ ' + t(lang, 'pain.urgent_text')
@@ -41,13 +43,14 @@ async def pain_screen(user_id, selected_date, key, lang="en"):
 
 async def send_pain_question(message, state, draft, selected_date, step, lang="en"):
     user_id = draft.get('user_id') or message.chat.id
-    text, options = await pain_screen(user_id, selected_date, step, lang=lang)
+    previous = previous_pain_answer(draft, selected_date, step, lang)
+    text, options = await pain_screen(user_id, selected_date, step, lang=lang, previous=previous)
     question = await message.answer(text, reply_markup=pain_keyboard(draft['edit_id'], step, options, lang=lang))
-    await state.update_data(step=step, message_id=question.message_id, user_id=user_id, other_pending=False)
+    await state.update_data(step=step, message_id=question.message_id, user_id=user_id, other_pending=False, previous_pain_answer=previous)
 
 
 async def refresh_question(message, state, draft, lang="en"):
-    text, options = await pain_screen(draft['user_id'], date.fromisoformat(draft['date']), draft['step'], lang=lang)
+    text, options = await pain_screen(draft['user_id'], date.fromisoformat(draft['date']), draft['step'], lang=lang, previous=draft.get("previous_pain_answer"))
     try:
         await message.bot.edit_message_text(chat_id=message.chat.id, message_id=draft['message_id'], text=text,
             reply_markup=pain_keyboard(draft['edit_id'], draft['step'], options, lang=lang))
@@ -83,14 +86,14 @@ async def pain_button(callback: CallbackQuery, state: FSMContext):
         await show_month(callback, selected_date, lang=lang, profile=language_profile or {})
         return
     if action == 'other':
-        _, options = await pain_screen(callback.from_user.id, selected_date, draft['step'], lang=lang)
+        _, options = await pain_screen(callback.from_user.id, selected_date, draft['step'], lang=lang, previous=draft.get("previous_pain_answer"))
         if not any(item['option_code'] == 'other' and item['is_selected'] for item in options):
             limit = 300 if draft['step'] == 'pain_triggers' else 200
             # CAN CHANGE TEXT
             prompt = t(lang, 'pain.please_type_a_short_description_1_limit_characters', limit=limit)
             if limit == 300:
                 prompt += t(lang, 'pain.you_can_mention_a_specific_food_drink_or_other')
-            current_text, _ = await pain_screen(callback.from_user.id, selected_date, draft['step'], lang=lang)
+            current_text, _ = await pain_screen(callback.from_user.id, selected_date, draft['step'], lang=lang, previous=draft.get("previous_pain_answer"))
             try:
                 await callback.message.edit_text(prompt + '\n\n' + current_text,
                     reply_markup=pain_keyboard(draft['edit_id'], draft['step'], options, lang=lang))
@@ -101,7 +104,7 @@ async def pain_button(callback: CallbackQuery, state: FSMContext):
             await callback.answer()
             return
     try:
-        next_step = await save_pain_choice(callback.from_user.id, selected_date, draft['step'], action)
+        next_step = await save_pain_choice(callback.from_user.id, selected_date, draft['step'], action, morning_id=draft.get('morning_id'))
     except ValueError as error:
         await callback.answer(t(lang, str(error)), show_alert=True)
         return
@@ -110,9 +113,11 @@ async def pain_button(callback: CallbackQuery, state: FSMContext):
     if action != 'done':
         await refresh_question(callback.message, state, draft, lang=lang)
         return
-    _, options = await pain_screen(callback.from_user.id, selected_date, draft['step'], lang=lang)
+    _, options = await pain_screen(callback.from_user.id, selected_date, draft['step'], lang=lang, previous=draft.get("previous_pain_answer"))
     # CAN CHANGE TEXT: подтверждение содержит все выбранные подписи, включая Other.
-    text = t(lang, 'pain.question.' + draft['step']) + t(lang, 'pain.answer_recorded') + '\n'.join(selected_labels(draft['step'], options, lang=lang))
+    text = with_previous(t(lang, 'pain.question.' + draft['step']),
+        draft.get("previous_pain_answer"), lang, receipt=True)
+    text += t(lang, 'pain.answer_recorded') + '\n'.join(selected_labels(draft['step'], options, lang=lang))
     if draft['step'] == 'pain_symptoms' and any(item['is_selected'] and item['option_code'] in URGENT_CODES for item in options):
         text += '\n\n⚠️ ' + t(lang, 'pain.urgent_text')
     await callback.message.edit_text(text, reply_markup=None)
@@ -127,7 +132,13 @@ async def pain_button(callback: CallbackQuery, state: FSMContext):
     draft = await state.get_data()
     # Локальный импорт позволяет вернуться к обычному вопросу без отдельного слоя диалога.
     from Handlers.day import send_question
-    await send_question(callback.message, state, draft, selected_date, next_step, lang=lang)
+    if draft.get("morning"):
+        from morning_storage import get_morning_session
+        session = await get_morning_session(callback.from_user.id)
+        from Handlers.morning import continue_morning
+        await continue_morning(callback.message, state, session, lang)
+    else:
+        await send_question(callback.message, state, draft, selected_date, next_step, lang=lang)
 
 
 @router.message(DayEdit.answer, F.text & ~F.text.startswith('/'))
@@ -146,11 +157,11 @@ async def pain_text(message: Message, state: FSMContext):
         await message.answer(t(lang, 'pain.please_use_the_buttons_or_select_other_to_enter'))
         return
     try:
-        await save_pain_choice(message.from_user.id, date.fromisoformat(draft['date']), draft['step'], 'other', message.text.strip())
+        await save_pain_choice(message.from_user.id, date.fromisoformat(draft['date']), draft['step'], 'other', message.text.strip(), morning_id=draft.get('morning_id'))
     except ValueError:
         # CAN CHANGE TEXT
         limit = 300 if draft['step'] == 'pain_triggers' else 200
-        text, options = await pain_screen(message.from_user.id, date.fromisoformat(draft['date']), draft['step'], lang=lang)
+        text, options = await pain_screen(message.from_user.id, date.fromisoformat(draft['date']), draft['step'], lang=lang, previous=draft.get("previous_pain_answer"))
         await message.bot.edit_message_text(chat_id=message.chat.id, message_id=draft['message_id'],
             text=t(lang, 'pain.please_write_between_1_and_limit_characters_or_reopen', limit=limit) + text,
             reply_markup=pain_keyboard(draft['edit_id'], draft['step'], options, lang=lang))

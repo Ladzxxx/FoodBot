@@ -9,6 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from database import get_user_profile
+from day_answers import snapshot_answers, medication_index, previous_answer, with_previous
 from day_storage import add_medication, get_day_entry, get_meal_counts, get_medications, get_recent_entries, reset_day_draft, save_day_answer, save_medication_relief
 from Forms.day import DayEdit, RATING_STEPS, TEXT_STEPS, TIME_STEPS, YES_NO_STEPS, day_marker, next_day_step, sleep_minutes
 from Handlers.routes import day_text, replace_message, show_month, today_for_user
@@ -76,9 +77,12 @@ async def open_diary_menu(message: Message, state: FSMContext):
     await message.answer(diary_menu_text(entries, today, profile["utc_offset"], counts, lang=lang), reply_markup=diary_menu_keyboard(today, lang=lang), parse_mode="HTML")
 
 
-def question_text(selected_date: date, step: str, lang="en") -> str:
+def question_text(selected_date: date, step: str, lang="en", *, morning=False) -> str:
     # CAN CHANGE TEXT
-    text = t(lang, 'diary.editing_day', date=selected_date, question=t(lang, "day.question." + step))
+    question = t(lang, "day.question." + step)
+    if morning and step in ("ache", "wake_time"):
+        question = t(lang, "morning.question." + step, date=selected_date)
+    text = t(lang, 'diary.editing_day', date=selected_date, question=question)
     if step == "bedtime" and selected_date > date.min:
         # CAN CHANGE TEXT: явная дата помогает отличить вчерашний вечер от сегодняшнего.
         text += t(lang, 'day.bedtime_range_selected_date_d_m_y_12_00', selected_date=selected_date - timedelta(days=1), selected_date_value=selected_date)
@@ -170,12 +174,13 @@ async def send_question(message: Message, state: FSMContext, draft: dict, select
     if step in PAIN_QUESTIONS:
         await send_pain_question(message, state, draft, selected_date, step, lang=lang)
         return
+    previous = previous_answer(draft, selected_date, step, lang)
     # CAN CHANGE TEXT
     question = await message.answer(
-        question_text(selected_date, step, lang=lang),
+        with_previous(question_text(selected_date, step, lang=lang, morning=draft.get("morning", False)), previous, lang),
         reply_markup=question_keyboard(draft["edit_id"], step, selected_date, lang=lang),
     )
-    await state.update_data(step=step, message_id=question.message_id)
+    await state.update_data(step=step, message_id=question.message_id, previous_answer=previous)
 
 
 async def record_answer(message: Message, user_id: int, state: FSMContext, value, lang="en"):
@@ -183,18 +188,44 @@ async def record_answer(message: Message, user_id: int, state: FSMContext, value
     selected_date = date.fromisoformat(draft["date"])
     step = draft["step"]
     entry = await get_day_entry(user_id, selected_date) or {}
-    if entry and not entry["completed"] and entry["next_step"] != step:
+    if not draft.get("morning") and entry and not entry["completed"] and entry["next_step"] != step:
         # Ответ мог сохраниться до сбоя Telegram. Повторно лекарство не добавляем.
         # CAN CHANGE TEXT
         await message.answer(t(lang, 'day.your_previous_answer_is_already_saved_let_s_continue'))
         await send_question(message, state, draft, selected_date, entry["next_step"], lang=lang)
         return
     next_step = next_day_step(step, value, entry)
-    if step == "wake_time":
-        duration = sleep_minutes({**entry, "wake_time": value})
+    if (not draft.get("morning") and entry.get("day_section_complete") and not entry.get("completed")
+        and step in ("bedtime", "wake_time", "sleep_satisfaction")):
+        updated = {**entry, step: value}
+        next_step = next((key for key in ("bedtime", "wake_time", "sleep_satisfaction")
+            if updated.get(key) is None), "complete")
+    morning_kwargs = {}
+    if draft.get("morning"):
+        from morning_storage import get_morning_session, first_other_step
+        session = await get_morning_session(user_id)
+        if not session or session["session_id"] != draft.get("morning_id"):
+            await message.answer(t(lang, "morning.expired"))
+            return
+        if session["step"] != step:
+            # Ответ уже сохранён, но Telegram мог не показать следующий вопрос.
+            from Handlers.morning import continue_morning
+            await message.answer(t(lang, 'day.your_previous_answer_is_already_saved_let_s_continue'))
+            await continue_morning(message, state, session, lang)
+            return
+        if step == "sleep_satisfaction":
+            next_step = await first_other_step(session)
+        morning_kwargs = {"morning_id": session["session_id"], "flow_next_step": next_step}
+    if step == "wake_time" or (draft.get("morning") and step == "bedtime" and entry.get("wake_time")):
+        if step == "bedtime":
+            duration = sleep_minutes({**entry, "bedtime": value[0], "bedtime_day": value[1]})
+        else:
+            duration = sleep_minutes({**entry, "wake_time": value})
         if duration is not None and duration < 0:
             # CAN CHANGE TEXT: не сохраняем отрицательную длительность и повторяем вопрос.
-            text = t(lang, 'day.sleep_time_cant_be_negative') + question_text(selected_date, step, lang=lang)
+            text = t(lang, 'day.sleep_time_cant_be_negative') + with_previous(
+                question_text(selected_date, step, lang=lang, morning=draft.get("morning", False)),
+                draft.get("previous_answer"), lang)
             try:
                 await message.bot.edit_message_text(
                     chat_id=message.chat.id, message_id=draft["message_id"], text=text,
@@ -206,17 +237,21 @@ async def record_answer(message: Message, user_id: int, state: FSMContext, value
             return
     if step == "bedtime":
         clock, bedtime_day = value
-        await save_day_answer(user_id, selected_date, step, clock, next_step, bedtime_day=bedtime_day)
+        await save_day_answer(user_id, selected_date, step, clock, next_step, bedtime_day=bedtime_day, **morning_kwargs)
     elif step == "medicine_details":
-        await add_medication(user_id, selected_date, value, replace_existing=entry.get("more_medicine") is None)
+        await add_medication(user_id, selected_date, value, replace_existing=entry.get("more_medicine") is None, **morning_kwargs)
     elif step == "medicine_relief":
-        await save_medication_relief(user_id, selected_date, value)
+        await save_medication_relief(user_id, selected_date, value, **morning_kwargs)
     else:
-        await save_day_answer(user_id, selected_date, step, value, next_step)
+        await save_day_answer(user_id, selected_date, step, value, next_step, **morning_kwargs)
 
     # Сначала сохраняем ответ, затем показываем его в исходном вопросе.
     # CAN CHANGE TEXT
-    text = question_text(selected_date, step, lang=lang) + t(lang, 'day.answer_recorded') + recorded_answer_text(step, value, lang=lang)
+    answer = recorded_answer_text(step, value, lang=lang)
+    if draft.get("morning") and step == "bedtime":
+        answer = f"{value[0]} ({selected_date + timedelta(days=value[1]):%d.%m.%Y})"
+    text = with_previous(question_text(selected_date, step, lang=lang, morning=draft.get("morning", False)),
+        draft.get("previous_answer"), lang, receipt=True) + t(lang, 'day.answer_recorded') + answer
     try:
         await message.bot.edit_message_text(
             chat_id=message.chat.id, message_id=draft["message_id"], text=text, reply_markup=None
@@ -224,11 +259,19 @@ async def record_answer(message: Message, user_id: int, state: FSMContext, value
     except TelegramBadRequest as error:
         if "message is not modified" not in error.message:
             raise
+    if step == "more_medicine" and value:
+        await state.update_data(medicine_index=draft.get("medicine_index", 0) + 1)
+        draft = await state.get_data()
     if step == "more_medicine" and not value:
         await show_medications(message, user_id, selected_date, lang=lang)
     if step == "pain_description_requested" and value:
         await state.update_data(pain_confirmation_id=draft['message_id'])
         draft = await state.get_data()
+    if draft.get("morning"):
+        from Handlers.morning import continue_morning
+        session["step"] = next_step
+        await continue_morning(message, state, session, lang)
+        return
     if next_step == "complete":
         await state.clear()
         entry = await get_day_entry(user_id, selected_date)
@@ -260,19 +303,27 @@ async def requested_day(callback: CallbackQuery, date_text: str, lang="en", prof
 
 async def start_questions(callback: CallbackQuery, state: FSMContext, selected_date: date, step: str, lang="en"):
     edit_id = token_hex(6)
+    snapshot = await snapshot_answers(callback.from_user.id, [selected_date])
+    draft = {
+        "date": selected_date.isoformat(), "edit_id": edit_id, "step": step,
+        "user_id": callback.from_user.id, "previous_values": snapshot,
+        "medicine_index": medication_index(snapshot, selected_date, step),
+    }
     await state.clear()
     if step in PAIN_QUESTIONS:
         await state.set_state(DayEdit.answer)
-        draft = {"date": selected_date.isoformat(), "edit_id": edit_id, "step": step, "user_id": callback.from_user.id}
         await state.set_data(draft)
         await send_pain_question(callback.message, state, draft, selected_date, step, lang=lang)
         await callback.answer()
         return
-    question = await replace_message(callback, question_text(selected_date, step, lang=lang), question_keyboard(edit_id, step, selected_date, lang=lang), lang=lang)
+    previous = previous_answer(draft, selected_date, step, lang)
+    text = with_previous(question_text(selected_date, step, lang=lang), previous, lang, html=True)
+    question = await replace_message(callback, text, question_keyboard(edit_id, step, selected_date, lang=lang), lang=lang)
     if question is None:
         return
+    draft.update(message_id=question.message_id, previous_answer=previous)
     await state.set_state(DayEdit.answer)
-    await state.set_data({"date": selected_date.isoformat(), "edit_id": edit_id, "step": step, "message_id": question.message_id})
+    await state.set_data(draft)
 
 
 @router.callback_query(F.data.startswith("day:edit:"))

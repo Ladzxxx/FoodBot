@@ -54,7 +54,7 @@ def profile_keyboard(field: str, profile: dict, lang="en") -> InlineKeyboardMark
         # CAN CHANGE TEXT
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=t(lang, 'profile.every_morning'), callback_data="profile:reminder_period:morning")],
-            [InlineKeyboardButton(text=t(lang, 'profile.every_evening'), callback_data="profile:reminder_period:evening")],
+            [InlineKeyboardButton(text=t(lang, 'profile.every_evening_recommended'), callback_data="profile:reminder_period:evening")],
         ])
     if field == "reminder_hour":
         first_hour = 6 if profile["reminder_period"] == "morning" else 18
