@@ -1,6 +1,7 @@
 from datetime import date
 import aiosqlite
 import database
+from privacy_storage import accept_consent
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.methods import DeleteMessage, EditMessageText
 from day_storage import save_day_answer, reset_day_draft, get_day_entry
@@ -99,6 +100,8 @@ class PainTests(BotTests):
         self.assertIsNotNone(self.button_data('☑ Lower middle'))
         before = await get_pain_answers(100, DAY, DAY)
         await self.click(stale, message_id=old_message)
+        await database.ensure_user_profile(200, 200)
+        await accept_consent(200, 'en')
         await self.click(self.button_data('☐ Upper right'), user_id=200)
         self.assertEqual(await get_pain_answers(100, DAY, DAY), before)
         self.assertEqual(await get_pain_answers(200, DAY, DAY), ([], []))

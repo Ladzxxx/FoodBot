@@ -22,6 +22,7 @@ from Forms.profile import PROFILE_QUESTIONS
 from Forms.pain import PAIN_OPTIONS
 from reminders import send_due_reminders
 from helpers import BotTests
+from privacy_storage import accept_consent
 
 
 class DictionaryTests(unittest.TestCase):
@@ -106,6 +107,7 @@ class LocalizationTests(BotTests):
 
     async def seed_ru(self, user_id=200):
         await database.ensure_user_profile(user_id, user_id)
+        await accept_consent(user_id, 'ru')
         await database.save_profile_answer(user_id, 'utc_offset', 3)
         await database.save_profile_settings(user_id, dict(language='ru',nickname='Влад',gender='secret',birth_year=2000,utc_offset=3,reminder_period='morning',reminder_hour=9))
         async with aiosqlite.connect(database.DB_PATH) as db:
@@ -115,20 +117,18 @@ class LocalizationTests(BotTests):
     async def test_name_guess_first_message_and_explicit_selection_wins(self):
         await self.command('/start', user_id=200, first_name='Влад')
         welcome = self.screens[self.message_events[-2][1]]
-        self.assertIn('Привет!', welcome['text'])
-        self.assertEqual(Path(welcome['photo'].path).name, 'RU-helloimage.png')
-        self.assertTrue(Path(welcome['photo'].path).is_file())
-        self.assertIsNone((await database.get_user_profile(200))['language'])
-        await self.click('profile:language:en', user_id=200)
+        self.assertEqual(welcome['text'], t('ru', 'privacy.welcome'))
+        self.assertIsNone(await database.get_user_profile(200))
+        await self.agree_privacy('en', user_id=200)
         self.assertIn('nickname', self.screen_text())
         self.assertEqual((await database.get_user_profile(200))['language'], 'en')
         await database.init_db()
         await self.command('/start', user_id=200, first_name='Влад')
         self.assertIn('nickname', self.screen_text())
         await self.command('/start', user_id=300, first_name='Vlad')
-        self.assertIn("Hi, I'm Foodie!", self.screens[self.message_events[-2][1]]['text'])
-        self.assertEqual(Path(self.screens[self.message_events[-2][1]]['photo'].path).name, 'helloimage.png')
-        await self.click('profile:language:ru', user_id=300)
+        self.assertEqual(self.screens[self.message_events[-2][1]]['text'], t('en', 'privacy.welcome'))
+        self.assertIsNone(await database.get_user_profile(300))
+        await self.agree_privacy('ru', user_id=300)
         self.assertIn('Введите никнейм', self.screen_text())
         self.assertEqual((await database.get_user_profile(300))['language'], 'ru')
 
@@ -182,7 +182,7 @@ class LocalizationTests(BotTests):
         deliver = AsyncMock()
         with patch.object(self.bot,'send_message',deliver):
             await send_due_reminders(self.bot,datetime(2030,1,1,12,tzinfo=timezone.utc))
-        self.assertEqual(deliver.call_args.kwargs['text'],"— Hi, it's Me!")
+        self.assertEqual(deliver.call_args.kwargs['text'],"Good morning, Tester! Shall we make an entry?")
         for text in ('Влад',):
             await self.command(text)
         await self.click('profile:utc_offset:3')
@@ -195,9 +195,13 @@ class LocalizationTests(BotTests):
         self.assertEqual((await database.get_user_profile(100))['language'],'ru')
         with patch.object(self.bot,'send_message',deliver):
             await send_due_reminders(self.bot,datetime(2030,1,2,12,tzinfo=timezone.utc))
-        self.assertEqual(deliver.call_args.kwargs['text'],'— Привет, это я!')
+        self.assertEqual(deliver.call_args.kwargs['text'],'Доброе утро, Влад! Сделаем запись?')
 
     async def test_missing_language_falls_back_to_russian_without_forcing_setup(self):
+        await database.ensure_user_profile(300, 300)
+        await accept_consent(300, 'ru')
         await self.command('/help', user_id=300)
         self.assertIn('дневник сна',self.screen_text())
-        self.assertIsNone(await database.get_user_profile(300))
+        profile = await database.get_user_profile(300)
+        self.assertIsNone(profile['language'])
+        self.assertEqual(profile['setup_complete'], 0)

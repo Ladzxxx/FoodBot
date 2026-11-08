@@ -18,6 +18,8 @@ import database
 import main
 from Forms.day import DayEdit
 from day_storage import get_day_entry
+from localization import t
+from privacy_storage import accept_consent, pending_deletions
 
 
 def day_buttons(keyboard):
@@ -41,6 +43,8 @@ def make_message(user_id=100, text=None, message_id=1, first_name="Tester"):
 
 class BotTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        pending_deletions.clear()
+        self.addCleanup(pending_deletions.clear)
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         db_path = Path(folder.name) / "calendar.sqlite3"
@@ -72,8 +76,15 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
             """)
             await db.commit()
 
+        # Обычные сценарии проверяем для существующего пользователя с согласием.
+        # Вход без согласия проверяется отдельно, без обхода middleware.
+        await accept_consent(100, "en")
         self.bot = Bot(token="123456:TEST_TOKEN")
         self.addAsyncCleanup(self.bot.session.close)
+        request_patch = patch.object(self.bot.session, "make_request", new_callable=AsyncMock,
+            side_effect=AssertionError("Unexpected Telegram API request in tests"))
+        request_patch.start()
+        self.addCleanup(request_patch.stop)
         for user_id in (100, 200, 300):
             state = main.dispatcher.fsm.get_context(
                 bot=self.bot, chat_id=user_id, user_id=user_id
@@ -175,6 +186,15 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         message = make_message(user_id, text=text, first_name=first_name)
         await main.dispatcher.feed_update(self.bot, Update(update_id=1, message=message))
 
+    async def agree_privacy(self, language="en", user_id=100):
+        label = {"en": "English", "ru": "Русский"}[language]
+        await self.click(self.button_data(label), user_id=user_id)
+        await self.click(self.button_data(t(language, "privacy.agree")), user_id=user_id)
+
+    async def start_with_consent(self, language="en", user_id=100, first_name="Tester"):
+        await self.command("/start", user_id=user_id, first_name=first_name)
+        await self.agree_privacy(language, user_id)
+
     def keyboard(self):
         return self.screens[self.current_message_id]["keyboard"]
 
@@ -204,6 +224,7 @@ class BotTests(unittest.IsolatedAsyncioTestCase):
         if await database.get_user_profile(user_id) is None:
             await database.ensure_user_profile(user_id, user_id)
             await database.save_profile_answer(user_id, "language", "en")
+            await accept_consent(user_id, "en")
         await self.open_day_edit(day, user_id)
         for label in ("21:00", "08:00", str(values[0]), str(values[1]), "No", "No"):
             await self.click(self.button_data(label), user_id=user_id)

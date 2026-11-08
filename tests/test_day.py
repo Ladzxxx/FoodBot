@@ -8,6 +8,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.methods import EditMessageText
 
 import database
+from privacy_storage import accept_consent
 from day_storage import get_medications, save_day_answer
 from Forms.day import DayEdit, day_marker, sleep_minutes
 from Handlers.day import parse_bedtime, parse_button_answer, question_text
@@ -221,6 +222,8 @@ class DayTests(BotTests):
         self.assertEqual((await self.state.get_data())["step"], "wake_time")
         self.assertEqual((await self.read_entry())["bedtime"], "21:00")
         current = self.button_data("08:00")
+        await database.ensure_user_profile(200, 200)
+        await accept_consent(200, 'en')
         await self.click(current, user_id=200)
         self.assertTrue(self.acknowledge.call_args.kwargs["show_alert"])
         await self.click(current, message_id=1)

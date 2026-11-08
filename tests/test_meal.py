@@ -9,6 +9,7 @@ import database
 from day_storage import add_meal, get_meals, update_meal_comment
 from Forms.meal import MealNote
 from helpers import BotTests
+from privacy_storage import accept_consent
 
 
 class MealTests(BotTests):
@@ -115,6 +116,90 @@ class MealTests(BotTests):
         self.assertIn("🍽 Meal notes: 1", self.screen_text())
         self.assertIn("✅ Excellent days: 0", self.screen_text())
         self.assertIsNone((await database.get_user_profile(100))["last_entry_at"])
+
+    async def test_command_accepts_explicit_time_and_description(self):
+        await self.set_offset(3)
+        with patch('Handlers.meal.datetime') as clock:
+            clock.now.return_value = datetime(2026, 10, 31, 22, tzinfo=timezone.utc)
+            await self.command('/meal 13:45 Soup')
+        meal = (await get_meals(100))[0]
+        self.assertEqual((meal['entry_date'], meal['meal_time'], meal['comment']),
+            ('2026-11-01', '13:45', 'Soup'))
+        self.assertIsNone(await self.state.get_state())
+
+    async def test_typed_time_updates_the_same_pending_meal(self):
+        await self.command('/meal')
+        original = (await get_meals(100))[0]
+        await self.command('13:45')
+        pending = (await get_meals(100))[0]
+        self.assertEqual(pending, {**original, 'meal_time': '13:45'})
+        self.assertEqual(await self.state.get_state(), MealNote.comment.state)
+        await self.command('14:00 Rice')
+        self.assertEqual(await get_meals(100), [{**original, 'meal_time': '14:00', 'comment': 'Rice'}])
+        self.assertIsNone(await self.state.get_state())
+
+    async def test_time_edit_after_midnight_and_timezone_change_keeps_record_and_timer(self):
+        await self.set_offset(3)
+        async with aiosqlite.connect(database.DB_PATH) as db:
+            await db.execute('UPDATE user_profiles SET last_entry_at = 123456 WHERE user_id = 100')
+            await db.commit()
+        with patch('Handlers.meal.datetime') as clock:
+            clock.now.return_value = datetime(2026, 10, 31, 22, tzinfo=timezone.utc)
+            await self.command('/meal 13:45 Soup')
+        original = (await get_meals(100))[0]
+        await self.command('/timezone')
+        await self.click('profile:utc_offset:-11')
+        await self.click(f"meal:time:{original['id']}")
+        with patch('Handlers.meal.datetime') as clock:
+            clock.now.return_value = datetime(2026, 11, 2, 3, tzinfo=timezone.utc)
+            await self.command('23:59')
+        self.assertEqual(await get_meals(100), [{**original, 'meal_time': '23:59'}])
+        self.assertIn('13:45', self.screen_text())
+        self.assertIn('23:59', self.screen_text())
+        self.assertEqual((await database.get_user_profile(100))['last_entry_at'], 123456)
+
+    async def test_invalid_time_in_command_or_edit_does_not_change_records(self):
+        for value in ('24:00', '12:60', '9:00'):
+            with self.subTest(command=value):
+                await self.command('/meal ' + value + ' Soup')
+                self.assertEqual(await get_meals(100), [])
+        await self.command('/meal 12:00 Soup')
+        original = (await get_meals(100))[0]
+        await self.click(f"meal:time:{original['id']}")
+        for value in ('24:00', '12:60', '9:00', 'invalid'):
+            with self.subTest(edit=value):
+                await self.command(value)
+                self.assertEqual(await get_meals(100), [original])
+                self.assertEqual(await self.state.get_state(), MealNote.time.state)
+
+    async def test_cancelling_time_edit_returns_to_comment_or_saved_meal(self):
+        await self.command('/meal')
+        original = (await get_meals(100))[0]
+        await self.click(f"meal:time:{original['id']}")
+        await self.click(self.button_data('Cancel'))
+        self.assertEqual(await self.state.get_state(), MealNote.comment.state)
+        self.assertEqual(await get_meals(100), [original])
+        await self.command('Soup')
+        saved = (await get_meals(100))[0]
+        await self.click(f"meal:time:{original['id']}")
+        cancel = self.button_data('Cancel')
+        question = self.current_message_id
+        await self.click(cancel)
+        self.assertIsNone(await self.state.get_state())
+        self.assertEqual(await get_meals(100), [saved])
+        await self.click(cancel, message_id=question)
+        self.assertTrue(self.acknowledge.call_args.kwargs['show_alert'])
+        self.assertEqual(await get_meals(100), [saved])
+
+    async def test_other_user_cannot_edit_meal_time(self):
+        await self.command('/meal 12:00 Soup')
+        original = (await get_meals(100))[0]
+        await database.ensure_user_profile(200, 200)
+        await accept_consent(200, 'en')
+        await self.click(f"meal:time:{original['id']}", user_id=200)
+        self.assertTrue(self.acknowledge.call_args.kwargs['show_alert'])
+        self.assertEqual(await get_meals(100), [original])
+        self.assertEqual(await get_meals(200), [])
 
 
 if __name__ == "__main__":

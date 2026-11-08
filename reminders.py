@@ -36,7 +36,7 @@ def reminder_day(profile: dict, now: datetime, lang="en") -> date | None:
     last_entry = profile["last_entry_at"]
     if last_entry is None:
         last_entry = profile["reminder_started_at"]
-    if profile["reminder_period"] != "morning" and (last_entry is None or now.timestamp() - last_entry < 24 * 60 * 60):
+    if last_entry is None or now.timestamp() - last_entry < 24 * 60 * 60:
         return None
     if local_now.hour < profile["reminder_hour"]:
         return None
@@ -67,7 +67,6 @@ async def send_due_reminders(bot: Bot, now: datetime | None = None, lang="en"):
                 continue
             reserved = await reserve_reminder(
                 profile["user_id"], local_date, int(now.timestamp()) - 86400, expected_profile=profile,
-                check_inactivity=profile["reminder_period"] != "morning"
             )
             if not reserved:
                 continue

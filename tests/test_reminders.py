@@ -9,8 +9,10 @@ from aiogram.methods import SendMessage
 
 import database
 import main
+from day_storage import save_day_answer
 from reminders import send_due_reminders
 from helpers import BotTests
+from privacy_storage import accept_consent
 
 
 class ReminderTests(BotTests):
@@ -27,6 +29,7 @@ class ReminderTests(BotTests):
         await super().asyncSetUp()
         async with aiosqlite.connect(database.DB_PATH) as db:
             await db.execute("DELETE FROM user_profiles")
+            await db.execute("DELETE FROM user_consents")
             await db.commit()
         self.now = datetime(2026, 11, 1, 6, tzinfo=timezone.utc)
         self.deliver = AsyncMock()
@@ -45,19 +48,22 @@ class ReminderTests(BotTests):
             """, (user_id, user_id, offset, period, hour, started, last_entry))
             await db.commit()
 
+        await accept_consent(user_id, 'en')
+
     def reminder_button(self):
         return self.deliver.call_args.kwargs["reply_markup"].inline_keyboard[0][0]
 
-    async def test_morning_reminder_opens_yesterday_and_starts_questions(self):
+    async def test_morning_reminder_opens_sleep_today_and_yesterdays_diary(self):
         await self.add_profile()
         await send_due_reminders(self.bot, self.now)
         self.deliver.assert_awaited_once()
-        self.assertEqual(self.deliver.call_args.kwargs["text"], "— Hi, it's Me!")
+        self.assertEqual(self.deliver.call_args.kwargs["text"], "Good morning, Tester! Shall we make an entry?")
         button = self.reminder_button()
-        self.assertEqual(button.text, "Make a note about 31.10.2026")
-        self.assertEqual(button.callback_data, "day:edit:2026-10-31")
-        await self.click(button.callback_data)
-        self.assertIn("Editing day: 31.10.2026", self.screen_text())
+        self.assertEqual(button.text, "Sleep for 01.11.2026 and yesterday's diary")
+        self.assertEqual(button.callback_data, "morning:open:2026-11-01")
+        with patch('Handlers.morning.today_for_user', return_value=date(2026, 11, 1)):
+            await self.click(button.callback_data)
+        self.assertIn("Editing day: 01.11.2026", self.screen_text())
         self.assertIn("When did you go to bed?", self.screen_text())
 
     async def test_evening_reminder_uses_today(self):
@@ -80,6 +86,43 @@ class ReminderTests(BotTests):
         self.deliver.assert_not_awaited()
         await send_due_reminders(self.bot, self.now + timedelta(seconds=1))
         self.deliver.assert_awaited_once()
+
+    async def test_evening_reminder_also_waits_exactly_24_hours(self):
+        now = self.now.replace(hour=15)
+        await self.add_profile(period='evening', hour=18,
+            last_entry=int((now - timedelta(hours=24) + timedelta(seconds=1)).timestamp()))
+        await send_due_reminders(self.bot, now)
+        self.deliver.assert_not_awaited()
+        reserved = await database.reserve_reminder(100, '2026-11-01', int(now.timestamp()) - 86400)
+        self.assertFalse(reserved)
+        await send_due_reminders(self.bot, now + timedelta(seconds=1))
+        self.deliver.assert_awaited_once()
+
+    async def test_no_consent_means_no_delivery_or_reserved_day(self):
+        await self.add_profile()
+        async with aiosqlite.connect(database.DB_PATH) as db:
+            await db.execute('DELETE FROM user_consents WHERE user_id = 100')
+            await db.commit()
+        await send_due_reminders(self.bot, self.now)
+        self.deliver.assert_not_awaited()
+        self.assertIsNone((await database.get_user_profile(100))['last_reminder_date'])
+        self.assertFalse(await database.reserve_reminder(100, '2026-11-01', int(self.now.timestamp()) - 86400))
+        await accept_consent(100, 'en')
+        await send_due_reminders(self.bot, self.now)
+        self.deliver.assert_awaited_once()
+
+    async def test_morning_does_not_remind_about_two_completed_sections(self):
+        await self.add_profile()
+        old_time = (self.now - timedelta(days=2)).timestamp()
+        with patch('day_storage.time', return_value=old_time):
+            await self.finish_edit('2026-10-31')
+            for field, value, next_step in (
+                ('bedtime', '22:00', 'wake_time'), ('wake_time', '08:00', 'sleep_satisfaction'),
+                ('sleep_satisfaction', 8, 'mood_control'),
+            ):
+                await save_day_answer(100, date(2026, 11, 1), field, value, next_step)
+        await send_due_reminders(self.bot, self.now)
+        self.deliver.assert_not_awaited()
 
     async def test_new_profile_waits_24_hours_after_setup(self):
         await self.add_profile()
@@ -174,7 +217,7 @@ class ReminderTests(BotTests):
         await self.add_profile(offset=-11, hour=9)
         now = datetime(2026, 11, 1, 0, tzinfo=timezone.utc)
         await send_due_reminders(self.bot, now)
-        self.assertEqual(self.reminder_button().callback_data, "day:edit:2026-10-30")
+        self.assertEqual(self.reminder_button().callback_data, "morning:open:2026-10-31")
 
     async def test_incomplete_or_blocked_profiles_receive_no_reminders(self):
         await self.add_profile(user_id=100)
@@ -231,7 +274,7 @@ class ReminderTests(BotTests):
 
         with (
             patch.object(main, "load_dotenv"),
-            patch.object(main, "getenv", return_value="123456:TEST_TOKEN"),
+            patch.object(main, "getenv", side_effect={"BOT_TOKEN": "123456:TEST_TOKEN"}.get),
             patch.object(main, "init_db", new_callable=AsyncMock),
             patch.object(main, "Bot", return_value=self.bot),
             patch.object(main, "reminder_loop", worker),

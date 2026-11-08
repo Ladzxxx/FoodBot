@@ -5,6 +5,7 @@ import unittest
 from openpyxl import load_workbook
 import aiosqlite
 import database
+from privacy_storage import accept_consent
 from day_storage import get_export_data, save_day_answer, add_meal
 from day_export import make_excel_file
 from pain_storage import save_pain_choice
@@ -102,6 +103,8 @@ class ExportTests(BotTests):
             self.assertIsNotNone(self.screens[self.current_message_id]['document'])
 
     async def test_empty_user_gets_no_empty_workbook(self):
+        await database.ensure_user_profile(200, 200)
+        await accept_consent(200, 'ru')
         await self.click('statistics:excel', user_id=200)
         self.assertIn('Пока нет записей', self.screen_text())
         self.assertEqual(self.document.call_count, 0)

@@ -241,7 +241,7 @@ async def get_reminder_profiles() -> list[dict]:
     return [dict(row) for row in rows]
 
 
-async def reserve_reminder(user_id: int, local_date: str, inactive_before: int, expected_profile: dict | None = None, *, check_inactivity: bool = True) -> bool:
+async def reserve_reminder(user_id: int, local_date: str, inactive_before: int, expected_profile: dict | None = None) -> bool:
     from privacy_storage import POLICY_VERSION, CONSENT_VERSION
     expected = expected_profile or {}
     async with aiosqlite.connect(DB_PATH) as db:
@@ -250,12 +250,12 @@ async def reserve_reminder(user_id: int, local_date: str, inactive_before: int, 
             UPDATE user_profiles SET last_reminder_date = ?, last_reminder_at = ?
             WHERE user_id = ? AND setup_complete = 1 AND reminders_enabled = 1
                 AND (last_reminder_date IS NULL OR last_reminder_date != ?)
-                AND (? = 0 OR COALESCE(last_entry_at, reminder_started_at) <= ?)
+                AND COALESCE(last_entry_at, reminder_started_at) <= ?
                 AND EXISTS (SELECT 1 FROM user_consents c WHERE c.user_id = user_profiles.user_id
                     AND c.policy_version = ? AND c.consent_version = ?)
                 AND (? IS NULL OR (utc_offset = ? AND reminder_period = ? AND reminder_hour = ?))
         """, (
-            local_date, inactive_before + 86400, user_id, local_date, int(check_inactivity), inactive_before, POLICY_VERSION, CONSENT_VERSION,
+            local_date, inactive_before + 86400, user_id, local_date, inactive_before, POLICY_VERSION, CONSENT_VERSION,
             expected.get("utc_offset"), expected.get("utc_offset"),
             expected.get("reminder_period"), expected.get("reminder_hour"),
         ))

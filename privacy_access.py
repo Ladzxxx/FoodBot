@@ -39,7 +39,8 @@ class PrivacyAccess(BaseMiddleware):
             state = data["state"]
             current = await state.get_state()
             if isinstance(event, Message):
-                command = (event.text or "").split(maxsplit=1)[0].split("@")[0].lower() if event.text else ""
+                words = (event.text or "").split(maxsplit=1)
+                command = words[0].split("@")[0].lower() if words else ""
                 if command in ("/start", "/privacy", "/delete_me"):
                     return await handler(event, data)
             elif (event.data or "").startswith("privacy:"):

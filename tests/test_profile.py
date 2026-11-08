@@ -3,11 +3,13 @@ from datetime import date
 from pathlib import Path
 
 import aiosqlite
-from aiogram.types import FSInputFile, ReplyKeyboardMarkup
+from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
 
 import database
-from Forms.profile import WELCOME_TEXT
+from Forms.privacy import PrivacySetup
 from helpers import BotTests
+from localization import t
+from privacy_storage import accept_consent, has_consent
 
 
 class ProfileTests(BotTests):
@@ -15,11 +17,11 @@ class ProfileTests(BotTests):
         await super().asyncSetUp()
         async with aiosqlite.connect(database.DB_PATH) as db:
             await db.execute("DELETE FROM user_profiles")
+            await db.execute("DELETE FROM user_consents")
             await db.commit()
 
     async def reach_timezone(self, language="en"):
-        await self.command("/start")
-        await self.click(f"profile:language:{language}")
+        await self.start_with_consent(language)
         await self.command("Foodie fan")
 
     async def finish_setup(self, period="morning", hour=9, offset=3):
@@ -32,16 +34,16 @@ class ProfileTests(BotTests):
         await self.command("/start")
         welcome = self.screens[self.message_events[0][1]]
         menu = welcome["keyboard"]
-        self.assertIsInstance(menu, ReplyKeyboardMarkup)
-        self.assertEqual([button.text for row in menu.keyboard for button in row], ["/meal", "/callendar", "/settings"])
-        self.assertEqual(welcome["text"], WELCOME_TEXT)
-        self.assertIsInstance(welcome["photo"], FSInputFile)
-        self.assertEqual(Path(welcome["photo"].path).name, "helloimage.png")
-        self.assertIn("What language do you prefer?", self.screen_text())
+        self.assertIsInstance(menu, ReplyKeyboardRemove)
+        self.assertEqual(welcome["text"], t("en", "privacy.welcome"))
+        self.assertIn("Choose your language", self.screen_text())
         self.assertEqual([b.text for b in self.keyboard().inline_keyboard[0]], ["Русский", "English"])
-        profile = await database.get_user_profile(100)
-        self.assertEqual(profile["setup_complete"], 0)
-        self.assertIsNone(profile["language"])
+        self.assertIsNone(await database.get_user_profile(100))
+        self.assertFalse(await has_consent(100))
+        await self.agree_privacy()
+        self.assertIsNone(self.keyboard())
+        menus = [s["keyboard"] for s in self.screens.values() if isinstance(s["keyboard"], ReplyKeyboardMarkup)]
+        self.assertEqual([b.text for row in menus[-1].keyboard for b in row], ["/meal", "/callendar", "/settings"])
 
     async def test_all_setup_answers_are_saved(self):
         await self.finish_setup()
@@ -61,7 +63,10 @@ class ProfileTests(BotTests):
 
     async def test_language_is_saved_and_switches_the_interface(self):
         await self.command("/start")
-        await self.click("profile:language:ru")
+        await self.click(self.button_data("Русский"))
+        self.assertIsNone(await database.get_user_profile(100))
+        self.assertEqual(await self.state.get_state(), PrivacySetup.consent.state)
+        await self.click(self.button_data(t("ru", "privacy.agree")))
         self.assertEqual((await database.get_user_profile(100))["language"], "ru")
         self.assertIn("Введите никнейм", self.screen_text())
 
@@ -76,6 +81,7 @@ class ProfileTests(BotTests):
         await database.ensure_user_profile(100, 100)
         await database.save_profile_answer(100, 'language', 'en')
         await database.save_profile_answer(100, 'nickname', 'Returning user')
+        await accept_consent(100, 'en')
         await database.init_db()
         await self.state.clear()
         await self.command('/start')
@@ -121,8 +127,7 @@ class ProfileTests(BotTests):
         self.assertIn("after 9:00 PM", self.screen_text())
 
     async def test_setup_resumes_after_restart_without_losing_answers(self):
-        await self.command("/start")
-        await self.click("profile:language:ru")
+        await self.start_with_consent("ru")
         await database.init_db()
         await self.state.clear()
         await self.command("/start")
@@ -135,9 +140,11 @@ class ProfileTests(BotTests):
 
     async def test_input_validation_and_stale_buttons_preserve_profile(self):
         await self.command("/start")
-        await self.click("profile:language:fr")
-        self.assertIsNone((await database.get_user_profile(100))["language"])
-        await self.click("profile:language:en")
+        draft = await self.state.get_data()
+        await self.click(f"privacy:lang:{draft['privacy_token']}:fr")
+        self.assertIsNone(await database.get_user_profile(100))
+        self.assertTrue(self.acknowledge.call_args.kwargs['show_alert'])
+        await self.agree_privacy()
         await self.command("   ")
         self.assertIsNone((await database.get_user_profile(100))["nickname"])
         await self.command("Nick")
@@ -174,10 +181,8 @@ class ProfileTests(BotTests):
         self.assertIsNone(await database.get_user_profile(100))
 
     async def test_profiles_are_separate_for_each_user(self):
-        await self.command("/start", user_id=100)
-        await self.command("/start", user_id=200)
-        await self.click("profile:language:ru", user_id=100)
-        await self.click("profile:language:en", user_id=200)
+        await self.start_with_consent("ru", user_id=100)
+        await self.start_with_consent("en", user_id=200)
         await self.command("First", user_id=100)
         await self.command("Second", user_id=200)
         self.assertEqual((await database.get_user_profile(100))["nickname"], "First")
@@ -185,9 +190,8 @@ class ProfileTests(BotTests):
         self.assertEqual((await database.get_user_profile(100))["language"], "ru")
 
     async def test_every_setup_answer_has_a_confirmation_before_the_next_question(self):
-        await self.command("/start")
+        await self.start_with_consent()
         for answer, expected, is_button, next_image in (
-            ("profile:language:en", "English", True, None),
             ("Nick", "Nick", False, "timezones.png"),
             ("profile:utc_offset:3", "+3:00 UTC", True, None),
             ("profile:reminder_period:morning", "Every morning", True, None),

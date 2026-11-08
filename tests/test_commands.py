@@ -21,7 +21,7 @@ class CommandTests(BotTests):
         self.bot.set_chat_menu_button.assert_awaited_once()
         self.assertEqual({item.command for item in BOT_COMMANDS}, {
             "settings", "callendar", "start", "statistics", "help", "timezone", "meal", "makenote",
-            "language",
+            "language", "privacy", "delete_me",
         })
 
     async def test_start_and_callendar_leave_any_dialogue_without_erasing_notes(self):
